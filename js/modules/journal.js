@@ -1,7 +1,18 @@
 // js/modules/journal.js
 import { appState } from '../core/state.js';
 import { UI } from '../components/ui.js';
-import { apiService } from '../api/googleSheets.js'; // Підключаємо наш API сервіс
+import { apiService } from '../api/googleSheets.js';
+
+// Допоміжна функція для переведення номера колонки в букву (0 = A, 1 = B, 2 = C і т.д.)
+function getColumnLetter(colIndex) {
+    let letter = '';
+    let temp = colIndex;
+    while (temp >= 0) {
+        letter = String.fromCharCode((temp % 26) + 65) + letter;
+        temp = Math.floor(temp / 26) - 1;
+    }
+    return letter;
+}
 
 export class Journal {
     constructor() {
@@ -11,10 +22,7 @@ export class Journal {
         this.columns = [];
         this.grades = {};
         
-        // Типи уроків згідно з вимогами МОН
         this.lessonTypes = ['Поточна', 'Самостійна', 'Контрольна', 'Зошит', 'Практична', 'Тематична', 'Семестрова'];
-        
-        // Групи результатів для НУШ (5-9 класи)
         this.nushGroups = ['Немає (звичайний урок)', 'ГР 1', 'ГР 2', 'ГР 3', 'ГР 4'];
     }
 
@@ -23,7 +31,7 @@ export class Journal {
         this.buildInitialLayout();
         this.bindGlobalEvents();
         
-        // Для демонстрації завантажуємо тестовий список учнів класу 5-В
+        // Завантажуємо учнів для класу 5-В (можна зробити динамічним через UI)
         await this.loadClassData('5-В'); 
     }
 
@@ -34,8 +42,7 @@ export class Journal {
                     <h1 style="font-size: var(--font-size-xl); font-weight: 700;">Журнал</h1>
                     
                     <select id="class-selector" class="form-control" style="width: 120px;">
-                        <option value="5-В">5-В клас</option>
-                        <option value="8-А">8-А клас</option>
+                        <option value="5-В" selected>5-В клас</option>
                     </select>
                     
                     <select id="subject-selector" class="form-control" style="width: 250px;">
@@ -57,16 +64,30 @@ export class Journal {
         `;
     }
 
+    // РЕАЛЬНИЙ виклик API: Завантаження списку учнів
     async loadClassData(className) {
         this.currentClass = className;
-        // Тут буде запит до apiService.getSheetData('Список учнів') для обраного класу
-        // Імітуємо отримання алфавітного списку:
-        this.classStudents = [
-            { id: 1, name: 'Андрєєв Ярослав' },
-            { id: 2, name: 'Василенко Роман' },
-            { id: 3, name: 'Габріадзе Гіоргі' },
-            { id: 4, name: 'Стойка Христина' }
-        ].sort((a, b) => a.name.localeCompare(b.name, 'uk')); // Суворе сортування
+        try {
+            const response = await apiService.getSheetData(className, 'Список учнів');
+            
+            if (response && response.data) {
+                // Парсимо дані з таблиці (колонка 0: №, колонка 1: Прізвище)
+                this.classStudents = response.data.map((row, index) => {
+                    return {
+                        id: parseInt(row[0]) || index + 1,
+                        name: row[1]
+                    };
+                }).filter(s => s.name); // Відкидаємо порожні рядки
+
+                // Суворе сортування учнів за алфавітом
+                this.classStudents.sort((a, b) => a.name.localeCompare(b.name, 'uk'));
+            } else {
+                this.classStudents = [];
+            }
+        } catch (error) {
+            console.error("Помилка завантаження списку учнів:", error);
+            this.classStudents = [];
+        }
     }
 
     bindGlobalEvents() {
@@ -84,121 +105,64 @@ export class Journal {
         });
     }
 
-    // ==========================================
-    // ЛОГІКА СТВОРЕННЯ НОВОГО ЖУРНАЛУ (АРКУША)
-    // ==========================================
-    openCreateJournalModal() {
-        const studentCheckboxes = this.classStudents.map(student => `
-            <label style="display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-xs);">
-                <input type="checkbox" class="student-select-cb" value="${student.id}" checked>
-                ${student.name}
-            </label>
-        `).join('');
-
-        const content = `
-            <div class="form-group">
-                <label class="form-label">Назва предмету (буде назвою аркуша)</label>
-                <input type="text" id="new-subject-name" class="form-control" placeholder="Наприклад: Інформатика (ІІ підгр.)">
-            </div>
-            <div class="form-group">
-                <label class="form-label">Учні, які вивчають предмет:</label>
-                <div style="max-height: 200px; overflow-y: auto; border: 1px solid var(--border-color); padding: var(--spacing-sm); border-radius: var(--border-radius-sm);">
-                    ${studentCheckboxes}
-                </div>
-            </div>
-        `;
-
-        UI.showModal('Створення нового журналу', content, () => {
-            const subjectName = document.getElementById('new-subject-name').value;
-            if (!subjectName) return false;
-
-            // Збираємо вибраних учнів
-            const selectedIds = Array.from(document.querySelectorAll('.student-select-cb:checked')).map(cb => parseInt(cb.value));
-            this.students = this.classStudents.filter(s => selectedIds.includes(s.id));
-            this.currentSubject = subjectName;
-
-            // Тут викликаємо API для створення аркуша в Google Sheets
-            // apiService._request({ action: 'createSheet', sheetName: subjectName, students: this.students });
-
-            this.columns = []; // Порожній журнал
-            this.grades = {};
-            this.renderJournalTable();
-            
-            // Додаємо в селект
-            const selector = document.getElementById('subject-selector');
-            selector.innerHTML += `<option value="${subjectName}" selected>${subjectName}</option>`;
-            
-            return true;
-        });
-    }
-
-    // ==========================================
-    // ЛОГІКА ДОДАВАННЯ УРОКУ (КОЛОНКИ)
-    // ==========================================
-    openAddLessonModal() {
-        const today = new Date().toISOString().split('T')[0]; // Формат YYYY-MM-DD для input type="date"
-
-        const content = `
-            <div class="form-group">
-                <label class="form-label">Дата уроку</label>
-                <input type="date" id="lesson-date" class="form-control" value="${today}">
-            </div>
-            <div class="form-group">
-                <label class="form-label">Тип оцінки</label>
-                <select id="lesson-type" class="form-control">
-                    ${this.lessonTypes.map(t => `<option value="${t}">${t}</option>`).join('')}
-                </select>
-            </div>
-            <div class="form-group">
-                <label class="form-label">Група результатів (НУШ 5-9 кл.)</label>
-                <select id="lesson-gr" class="form-control">
-                    ${this.nushGroups.map(gr => `<option value="${gr}">${gr}</option>`).join('')}
-                </select>
-            </div>
-        `;
-
-        UI.showModal('Додати урок', content, () => {
-            const dateVal = document.getElementById('lesson-date').value;
-            const typeVal = document.getElementById('lesson-type').value;
-            const grVal = document.getElementById('lesson-gr').value;
-
-            // Форматуємо дату для відображення (наприклад, 2026-09-01)
-            const newCol = {
-                id: 'col_' + Date.now(),
-                date: dateVal,
-                type: typeVal,
-                gr: grVal !== 'Немає (звичайний урок)' ? grVal : null
-            };
-
-            this.columns.push(newCol);
-            
-            // Запит до Google Sheets на створення колонки
-            // apiService._request({ action: 'addColumn', sheetName: this.currentSubject, columnData: newCol });
-
-            this.renderJournalTable();
-            return true;
-        });
-    }
-
-    // ==========================================
-    // ВІДОБРАЖЕННЯ ТАБЛИЦІ
-    // ==========================================
+    // РЕАЛЬНИЙ виклик API: Завантаження оцінок з конкретного аркуша
     async loadSubjectJournal() {
         document.getElementById('journal-workspace').innerHTML = '<p>Завантаження даних з Google Таблиць...</p>';
         
-        // Імітація завантаження існуючого журналу
-        setTimeout(() => {
-            this.students = this.classStudents; // Беремо всіх для прикладу
-            this.columns = [
-                { id: 'c1', date: '2026-09-01', type: 'Поточна', gr: null },
-                { id: 'c2', date: '2026-09-02', type: 'Поточна', gr: null },
-            ];
-            this.grades = {
-                1: { 'c1': 10 },
-                2: { 'c1': 11, 'c2': 12 }
-            };
+        try {
+            const response = await apiService.getSheetData(this.currentClass, this.currentSubject);
+
+            if (!response.headers || response.headers.length === 0) {
+                 document.getElementById('journal-workspace').innerHTML = '<p>Журнал для цього предмета ще порожній або не існує.</p>';
+                 this.students = this.classStudents;
+                 this.columns = [];
+                 this.grades = {};
+                 return;
+            }
+
+            this.columns = [];
+            // Парсимо дати уроків (вони починаються з 3-ї колонки, індекс 2)
+            for (let i = 2; i < response.headers.length; i++) {
+                const dateVal = response.headers[i];
+                if (dateVal) {
+                    this.columns.push({
+                        id: 'col_' + i,
+                        date: dateVal,
+                        type: 'Поточна', 
+                        gr: null,
+                        index: i,
+                        letter: getColumnLetter(i) // Конвертуємо індекс (2) у літеру ('C')
+                    });
+                }
+            }
+
+            this.students = [];
+            this.grades = {};
+
+            // Парсимо учнів та їхні оцінки
+            response.data.forEach((row, rowIndex) => {
+                if (!row[1]) return; // Пропускаємо рядки без прізвища
+
+                const studentId = parseInt(row[0]) || rowIndex + 1;
+                this.students.push({ 
+                    id: studentId, 
+                    name: row[1], 
+                    // Реальний номер рядка в Google Sheets (A1-A2 - шапка, A3 - заголовки, A4 - перший учень)
+                    rowIndex: rowIndex + 4 
+                });
+
+                this.grades[studentId] = {};
+                this.columns.forEach((col) => {
+                    this.grades[studentId][col.id] = row[col.index] || '';
+                });
+            });
+
             this.renderJournalTable();
-        }, 500);
+
+        } catch (error) {
+            console.error(error);
+            document.getElementById('journal-workspace').innerHTML = `<p style="color:var(--danger-color)">Помилка з'єднання: ${error.message}</p>`;
+        }
     }
 
     renderJournalTable() {
@@ -261,9 +225,9 @@ export class Journal {
         });
     }
 
-    // Швидке введення оцінки прямо в клітинку (як у Excel)
+    // Швидке введення оцінки та відправка у Google Sheets
     openGradeInput(cellElement, studentId, colId) {
-        if (cellElement.querySelector('input')) return; // Вже редагується
+        if (cellElement.querySelector('input')) return;
 
         const currentVal = cellElement.innerText;
         cellElement.innerHTML = `<input type="number" min="1" max="12" value="${currentVal}" style="width: 100%; text-align: center; border: 1px solid var(--primary-color); outline: none;">`;
@@ -274,28 +238,36 @@ export class Journal {
         const saveGrade = async () => {
             let newVal = input.value;
             
-            // Якщо введено значення, форматуємо до цілого числа
+            // Якщо оцінка введена, гарантуємо, що це ціле число (без ком)
             if (newVal !== '') {
                 newVal = parseInt(newVal, 10).toString(); 
             }
 
-            // Оптимістичне оновлення UI
+            // Оптимістичне оновлення інтерфейсу
             cellElement.innerHTML = newVal;
-            
             if (!this.grades[studentId]) this.grades[studentId] = {};
             this.grades[studentId][colId] = newVal;
 
-            // Візуальна індикація збереження
-            cellElement.style.backgroundColor = 'rgba(16, 185, 129, 0.2)'; // Блимає зеленим
+            cellElement.style.backgroundColor = 'rgba(16, 185, 129, 0.2)'; // Зелений колір (завантаження)
             
             try {
-                // Відправка у Google Sheets у фоні
-                // await apiService.updateCell(this.currentSubject, `Row:${studentId}_Col:${colId}`, newVal);
-                setTimeout(() => { cellElement.style.backgroundColor = ''; }, 500);
+                // Знаходимо реальні координати (Рядок та Стовпець) для Google Sheets
+                const student = this.students.find(s => s.id == studentId);
+                const column = this.columns.find(c => c.id == colId);
+
+                // РЕАЛЬНИЙ виклик API: Оновлення клітинки
+                await apiService.updateCell(
+                    this.currentClass, 
+                    this.currentSubject, 
+                    student.rowIndex, 
+                    column.letter, 
+                    newVal
+                );
+
+                setTimeout(() => { cellElement.style.backgroundColor = ''; }, 500); // Скидаємо колір
             } catch (error) {
-                // Відкат у разі помилки
-                cellElement.style.backgroundColor = 'rgba(239, 68, 68, 0.2)';
-                alert('Помилка збереження в Google Таблицю!');
+                cellElement.style.backgroundColor = 'rgba(239, 68, 68, 0.2)'; // Червоний (помилка)
+                alert('Помилка збереження в Google Таблицю: ' + error.message);
             }
         };
 
@@ -304,4 +276,8 @@ export class Journal {
             if (e.key === 'Enter') saveGrade();
         });
     }
+
+    // Модалки для додавання (Логіку відправки на сервер для них додамо на наступному кроці, якщо потрібно)
+    openCreateJournalModal() { alert('Цей функціонал підключимо до бекенду пізніше!'); }
+    openAddLessonModal() { alert('Функціонал додавання стовпця підключимо пізніше!'); }
 }
